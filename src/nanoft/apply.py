@@ -38,7 +38,7 @@ def apply_lora(
     Returns:
         The model with LoRA layers injected (modified in-place).
     """
-    patterns = target_modules or config.get_target_module_names() if hasattr(config, 'get_target_module_names') else config.get_target_modules()
+    patterns = target_modules or config.get_target_modules()
     target_names = get_target_module_names(model, patterns)
 
     for name in target_names:
