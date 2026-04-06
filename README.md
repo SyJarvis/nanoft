@@ -1,0 +1,152 @@
+# NanoFT
+
+**Nano Fine-Tuning** — 轻量级端侧大模型微调框架
+
+NanoFT 是一个面向边缘设备（Jetson GPU、Apple MPS、ARM CPU）的 LLM 微调框架，纯 Python 实现，与 HuggingFace 生态兼容。
+
+## 特性
+
+- **LoRA 微调** — 低秩适配器，只训练极少量参数
+- **QLoRA** — NF4 量化训练，显存降低 4 倍（开发中）
+- **多设备支持** — CUDA / MPS / CPU 自动检测
+- **PEFT 兼容** — 输出的 adapter 可被 `peft.PeftModel` 直接加载
+- **推理加速** — 权重合并 + GGUF/ONNX 导出（开发中）
+- **轻量依赖** — 仅需 torch、transformers、datasets、safetensors
+
+## 安装
+
+```bash
+pip install -e .
+```
+
+## 快速开始
+
+```python
+from nanoft import (
+    LoRAConfig,
+    prepare_model_for_training,
+    print_trainable_parameters,
+    save_adapter,
+    merge_lora_weights,
+    save_merged_model,
+)
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+# 加载模型
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.5-2B", device_map="auto")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-2B")
+
+# 配置 LoRA
+config = LoRAConfig(
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
+    target_modules=["q_proj", "k_proj", "v_proj"],
+)
+
+# 注入 LoRA 层
+model = prepare_model_for_training(model, config)
+print_trainable_parameters(model)
+# Trainable parameters: 1,572,864 / 2,154,738,688 (0.07%)
+
+# ... 用 HuggingFace Trainer 训练 ...
+
+# 保存 adapter（PEFT 格式）
+save_adapter(model, "./adapter", config)
+
+# 合并权重并导出完整模型
+merge_lora_weights(model)
+save_merged_model(model, "./merged_model", tokenizer=tokenizer)
+```
+
+完整训练示例见 [examples/train_lora.py](../examples/train_lora.py)。
+
+## 配置说明
+
+```python
+config = LoRAConfig(
+    r=8,                    # LoRA 秩
+    lora_alpha=32,          # 缩放因子，实际 scaling = alpha / r = 4.0
+    lora_dropout=0.1,       # Dropout 概率
+    target_modules=[        # 要替换的层（子串匹配）
+        "q_proj", "k_proj", "v_proj"
+    ],
+    bias="none",            # "none" | "all" | "lora_only"
+    task_type="CAUSAL_LM",  # 任务类型
+)
+```
+
+## API 参考
+
+### 核心接口
+
+| 函数 | 说明 |
+|------|------|
+| `prepare_model_for_training(model, config)` | 冻结参数 + 注入 LoRA 层 |
+| `apply_lora(model, config)` | 注入 LoRA 层（不冻结参数） |
+| `remove_lora(model)` | 移除 LoRA，还原为标准 Linear |
+| `merge_lora_weights(model)` | 合并 LoRA 到原权重（推理加速） |
+| `save_adapter(model, path, config)` | 保存 adapter（PEFT 兼容） |
+| `load_adapter(model, path)` | 加载 adapter |
+| `save_merged_model(model, path)` | 保存合并后的完整模型 |
+| `detect_device()` | 检测可用设备 |
+| `print_trainable_parameters(model)` | 打印可训练参数统计 |
+
+### 层类型
+
+| 类 | 说明 |
+|----|------|
+| `LoRALinear` | 带 LoRA 的线性层，继承 `nn.Linear` |
+| `LoRAConfig` | 配置 dataclass，支持 PEFT 序列化 |
+
+## 项目结构
+
+```
+nanoft/
+├── config.py          # LoRAConfig 配置
+├── layers.py          # LoRALinear 层实现
+├── apply.py           # LoRA 注入/移除
+├── merge.py           # 权重合并
+├── save_load.py       # Adapter 保存/加载（PEFT 兼容）
+├── device.py          # 设备检测
+├── train_utils.py     # 训练准备工具
+├── export/            # GGUF / ONNX 导出（开发中）
+└── engine/            # 内置推理引擎（开发中）
+```
+
+## PEFT 兼容性
+
+NanoFT 输出的 adapter 目录结构：
+
+```
+adapter/
+├── adapter_config.json          # PEFT 标准格式
+└── adapter_model.safetensors    # 只含 lora_A / lora_B 权重
+```
+
+可以用 PEFT 直接加载：
+
+```python
+from peft import PeftModel
+
+base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.5-2B")
+model = PeftModel.from_pretrained(base_model, "./adapter")
+```
+
+## 依赖
+
+```
+# 必须
+torch>=2.1.0
+transformers>=4.36.0
+datasets>=2.14.0
+safetensors>=0.4.0
+
+# 可选
+gguf>=0.6.0          # GGUF 导出
+onnx>=1.15.0         # ONNX 导出
+```
+
+## License
+
+MIT
