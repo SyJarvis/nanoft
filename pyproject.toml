@@ -1,6 +1,6 @@
 [project]
 name = "nanoft"
-version = "0.1.0"
+version = "0.1.1"
 description = "轻量级端侧 LLM LoRA 微调框架"
 authors = [
     {name = "Runke Zhong"}
@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "torch>=2.1.0",
+    "torch>=2.8.0",
     "transformers>=4.36.0",
     "datasets>=2.14.0",
     "safetensors>=0.4.0",
@@ -30,3 +30,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
