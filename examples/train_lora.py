@@ -7,10 +7,10 @@ Usage:
 
 import argparse
 import json
+import os
 
 from nanoft import (
     LoRAConfig,
-    merge_lora_weights,
     save_adapter,
     save_merged_model,
     prepare_model_for_training,
@@ -45,8 +45,10 @@ def main():
     data_cfg = cfg["data"]
     out_cfg = cfg["output"]
 
-    # ── 1. 下载模型 ──────────────────────────────────────────
-    model_dir = snapshot_download(cfg["model_name"])
+    # ── 1. 下载或定位模型 ───────────────────────────────────
+    model_dir = cfg["model_name"]
+    if not os.path.exists(model_dir):
+        model_dir = snapshot_download(model_dir)
 
     # ── 2. 加载 tokenizer 和模型 ─────────────────────────────
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
@@ -68,11 +70,18 @@ def main():
 
     # ── 4. 加载并处理数据集 ──────────────────────────────────
     dataset = load_dataset("json", data_files=data_cfg["data_path"])
+    max_samples = data_cfg.get("max_samples")
+    if max_samples:
+        dataset["train"] = dataset["train"].select(
+            range(min(max_samples, len(dataset["train"])))
+        )
     dataset = dataset["train"].train_test_split(test_size=data_cfg["test_size"])
 
     max_length = train_cfg["max_length"]
+    data_format = data_cfg.get("format", "alpaca")
+    text_column = data_cfg.get("text_column", "text")
 
-    def process_func(example):
+    def process_alpaca(example):
         instruction = tokenizer(
             "\n".join(["Human: " + example["instruction"], example["input"]]).strip()
             + "\n\nAssistant: "
@@ -91,13 +100,36 @@ def main():
             "labels": labels,
         }
 
+    def process_text(example):
+        encoded = tokenizer(
+            example[text_column] + tokenizer.eos_token,
+            truncation=True,
+            max_length=max_length,
+        )
+        encoded["labels"] = list(encoded["input_ids"])
+        return encoded
+
+    if data_format == "alpaca":
+        process_func = process_alpaca
+    elif data_format == "text":
+        process_func = process_text
+    else:
+        raise ValueError("data.format must be 'alpaca' or 'text'")
+
     tokenized_dataset = dataset.map(
         process_func, remove_columns=dataset["train"].column_names
     )
 
     # ── 5. 训练 ──────────────────────────────────────────────
     info = detect_device()
-    is_bf16 = info.device_type == "cuda" and info.supports_bf16
+    is_bf16 = train_cfg.get(
+        "bf16",
+        info.device_type == "cuda" and info.supports_bf16,
+    )
+    is_fp16 = train_cfg.get(
+        "fp16",
+        not is_bf16 and info.device_type != "cpu",
+    )
 
     train_args = TrainingArguments(
         output_dir=out_cfg["output_dir"],
@@ -106,13 +138,17 @@ def main():
         per_device_eval_batch_size=train_cfg["per_device_eval_batch_size"],
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
         bf16=is_bf16,
-        fp16=not is_bf16 and info.device_type != "cpu",
+        fp16=is_fp16,
         logging_steps=train_cfg["logging_steps"],
         num_train_epochs=train_cfg["num_train_epochs"],
         warmup_ratio=train_cfg["warmup_ratio"],
         weight_decay=train_cfg["weight_decay"],
+        max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
         save_total_limit=train_cfg["save_total_limit"],
         save_steps=train_cfg["save_steps"],
+        max_steps=train_cfg.get("max_steps", -1),
+        eval_strategy=train_cfg.get("eval_strategy", "no"),
+        eval_steps=train_cfg.get("eval_steps"),
     )
 
     trainer = Trainer(
@@ -130,7 +166,6 @@ def main():
     print(f"Adapter saved to {out_cfg['adapter_dir']}")
 
     # 保存合并后的完整模型
-    merge_lora_weights(model)
     save_merged_model(model, out_cfg["merged_dir"], tokenizer=tokenizer)
     print(f"Merged model saved to {out_cfg['merged_dir']}")
 

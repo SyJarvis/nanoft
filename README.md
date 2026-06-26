@@ -9,7 +9,7 @@ NanoFT 是一个面向边缘设备（Jetson GPU、Apple MPS、ARM CPU）的 LLM 
 - **LoRA 微调** — 低秩适配器，只训练极少量参数
 - **QLoRA** — NF4 量化训练，显存降低 4 倍（开发中）
 - **多设备支持** — CUDA / MPS / CPU 自动检测
-- **PEFT 兼容** — 输出的 adapter 可被 `peft.PeftModel` 直接加载
+- **独立 Adapter 格式** — 默认保存 NanoFT 原生 adapter，可显式导出 PEFT 兼容格式
 - **推理加速** — 权重合并 + GGUF/ONNX 导出（开发中）
 - **轻量依赖** — 仅需 torch、transformers、datasets、safetensors
 
@@ -27,7 +27,7 @@ from nanoft import (
     prepare_model_for_training,
     print_trainable_parameters,
     save_adapter,
-    merge_lora_weights,
+    save_peft_adapter,
     save_merged_model,
 )
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -51,11 +51,13 @@ print_trainable_parameters(model)
 
 # ... 用 HuggingFace Trainer 训练 ...
 
-# 保存 adapter（PEFT 格式）
+# 保存 adapter（NanoFT 原生格式）
 save_adapter(model, "./adapter", config)
 
-# 合并权重并导出完整模型
-merge_lora_weights(model)
+# 如需 PEFT 兼容格式，显式导出
+save_peft_adapter(model, "./adapter_peft", config)
+
+# 合并权重并导出完整模型；保存前会自动卸载 LoRA 层
 save_merged_model(model, "./merged_model", tokenizer=tokenizer)
 ```
 
@@ -86,9 +88,11 @@ config = LoRAConfig(
 | `apply_lora(model, config)` | 注入 LoRA 层（不冻结参数） |
 | `remove_lora(model)` | 移除 LoRA，还原为标准 Linear |
 | `merge_lora_weights(model)` | 合并 LoRA 到原权重（推理加速） |
-| `save_adapter(model, path, config)` | 保存 adapter（PEFT 兼容） |
-| `load_adapter(model, path)` | 加载 adapter |
-| `save_merged_model(model, path)` | 保存合并后的完整模型 |
+| `merge_and_unload_lora(model)` | 合并 LoRA 并替换回普通 Linear |
+| `save_adapter(model, path, config)` | 保存 NanoFT 原生 adapter |
+| `save_peft_adapter(model, path, config)` | 保存 PEFT 兼容 adapter |
+| `load_adapter(model, path)` | 加载 NanoFT 或 PEFT adapter |
+| `save_merged_model(model, path)` | 保存无 LoRA 参数残留的完整模型 |
 | `detect_device()` | 检测可用设备 |
 | `print_trainable_parameters(model)` | 打印可训练参数统计 |
 
@@ -107,37 +111,55 @@ nanoft/
 ├── layers.py          # LoRALinear 层实现
 ├── apply.py           # LoRA 注入/移除
 ├── merge.py           # 权重合并
-├── save_load.py       # Adapter 保存/加载（PEFT 兼容）
+├── save_load.py       # Adapter 保存/加载（NanoFT 原生 + PEFT 兼容）
 ├── device.py          # 设备检测
 ├── train_utils.py     # 训练准备工具
 ├── export/            # GGUF / ONNX 导出（开发中）
 └── engine/            # 内置推理引擎（开发中）
 ```
 
-## PEFT 兼容性
+## Adapter 格式
 
-NanoFT 输出的 adapter 目录结构：
+NanoFT 默认输出原生 adapter，权重 key 与模型内部 `state_dict` 一致：
 
 ```
 adapter/
-├── adapter_config.json          # PEFT 标准格式
-└── adapter_model.safetensors    # 只含 lora_A / lora_B 权重
+├── adapter_config.json
+└── adapter_model.safetensors    # q_proj.lora_A / q_proj.lora_B 等内部 key
 ```
 
-可以用 PEFT 直接加载：
+`load_adapter()` 会自动识别 NanoFT 原生格式和 PEFT 兼容格式。
+
+如需给 PEFT 直接加载，使用 `save_peft_adapter()`：
 
 ```python
+from nanoft import save_peft_adapter
 from peft import PeftModel
 
+save_peft_adapter(model, "./adapter_peft", config)
+
 base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.5-2B")
-model = PeftModel.from_pretrained(base_model, "./adapter")
+model = PeftModel.from_pretrained(base_model, "./adapter_peft")
+```
+
+## MPS 训练
+
+在 Apple MPS 上，如果 fp16 训练出现 `nan` 梯度或非有限权重，可以在训练配置里显式关闭混合精度：
+
+```json
+{
+  "training": {
+    "fp16": false,
+    "bf16": false
+  }
+}
 ```
 
 ## 依赖
 
 ```
 # 必须
-torch>=2.1.0
+torch>=2.8.0
 transformers>=4.36.0
 datasets>=2.14.0
 safetensors>=0.4.0

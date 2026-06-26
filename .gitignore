@@ -5,3 +5,6 @@ __pycache__/
 .cursor
 .sisyphus/
 .DS_Store
+.cache/
+data/
+output/
