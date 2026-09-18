@@ -1,12 +1,12 @@
 [project]
 name = "nanoft"
-version = "0.1.1"
-description = "轻量级端侧 LLM LoRA 微调框架"
+version = "0.2.0"
+description = "轻量级端侧 LLM 微调框架与工具集"
 authors = [
     {name = "Runke Zhong"}
 ]
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -19,9 +19,21 @@ classifiers = [
 ]
 dependencies = [
     "torch>=2.8.0",
-    "transformers>=4.36.0",
+    "transformers>=4.51.0",
     "datasets>=2.14.0",
     "safetensors>=0.4.0",
+]
+
+[project.optional-dependencies]
+trl = [
+    "trl>=0.24.0",
+    "accelerate",
+]
+peft = [
+    "peft",
+]
+qlora = [
+    "bitsandbytes",
 ]
 
 [build-system]

@@ -55,12 +55,25 @@ def detect_device() -> DeviceInfo:
     )
 
 
-def get_recommended_dtype(device_type: str) -> torch.dtype:
-    """Return recommended compute dtype for the device."""
+def get_recommended_dtype(
+    device_type: str,
+    supports_bf16: Optional[bool] = None,
+) -> torch.dtype:
+    """Return the stable default training dtype for the device.
+
+    CUDA prefers BF16 when available and otherwise uses FP16. MPS defaults to
+    FP32 because FP16 optimizer/training stability varies by model; callers
+    with a validated low-memory MPS setup can still request FP16 explicitly.
+    """
     if device_type == "cuda":
-        return torch.bfloat16
+        if supports_bf16 is None:
+            supports_bf16 = (
+                torch.cuda.is_available()
+                and torch.cuda.is_bf16_supported()
+            )
+        return torch.bfloat16 if supports_bf16 else torch.float16
     if device_type == "mps":
-        return torch.float16
+        return torch.float32
     return torch.float32
 
 
@@ -70,9 +83,11 @@ def move_to_device(
     dtype: Optional[torch.dtype] = None,
 ) -> nn.Module:
     """Move model to target device with proper dtype handling."""
+    supports_bf16 = None
     if device is None:
         info = detect_device()
         device = info.device_type
+        supports_bf16 = info.supports_bf16
     if dtype is None:
-        dtype = get_recommended_dtype(device)
+        dtype = get_recommended_dtype(device, supports_bf16=supports_bf16)
     return model.to(device=device, dtype=dtype)

@@ -32,6 +32,15 @@ class LoRALayer:
         return self.lora_alpha / self.r
 
 
+def is_lora_module(module) -> bool:
+    """Return True for any module carrying NanoFT LoRA state.
+
+    Matches both dense ``LoRALinear`` and the quantized-base wrapper
+    ``LoRAQuantLinear`` (both subclass the ``LoRALayer`` mixin).
+    """
+    return isinstance(module, LoRALayer)
+
+
 class LoRALinear(nn.Linear, LoRALayer):
     """Drop-in replacement for nn.Linear with LoRA adapters.
 
@@ -95,7 +104,7 @@ class LoRALinear(nn.Linear, LoRALayer):
         self.weight.data -= self._T(self.lora_B @ self.lora_A) * self.scaling
         self.merged = False
 
-    def train(self, mode: bool = True):
+    def train(self, mode: bool = True) -> LoRALinear:
         """Switch between train/eval, managing merge state."""
         nn.Linear.train(self, mode)
         if mode:
@@ -104,6 +113,7 @@ class LoRALinear(nn.Linear, LoRALayer):
         else:
             if self.merge_weights and not self.merged:
                 self.merge()
+        return self
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass with optional LoRA adapter."""

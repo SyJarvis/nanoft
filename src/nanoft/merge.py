@@ -6,7 +6,21 @@ import copy
 
 import torch.nn as nn
 
-from .layers import LoRALinear
+from .layers import LoRALinear, is_lora_module
+from .quant import LoRAQuantLinear
+
+
+def _reject_quantized(model: nn.Module) -> None:
+    quantized = [
+        name for name, module in model.named_modules()
+        if isinstance(module, LoRAQuantLinear)
+    ]
+    if quantized:
+        raise TypeError(
+            "cannot merge into 4-bit quantized weights; use "
+            "nanoft.quant.dequantize_and_merge() instead: "
+            + ", ".join(quantized)
+        )
 
 
 def merge_lora_weights(model: nn.Module, inplace: bool = True) -> nn.Module:
@@ -16,6 +30,9 @@ def merge_lora_weights(model: nn.Module, inplace: bool = True) -> nn.Module:
     The layer remains a LoRALinear but with merged=True, so forward() skips the
     LoRA branch and uses the standard F.linear path.
 
+    Raises TypeError if the model contains quantized LoRA layers — 4-bit
+    weights cannot be merged in place (use dequantize_and_merge()).
+
     Args:
         model: Model with LoRA layers.
         inplace: If True, modify model in-place.
@@ -23,12 +40,14 @@ def merge_lora_weights(model: nn.Module, inplace: bool = True) -> nn.Module:
     Returns:
         Model with merged weights.
     """
+    _reject_quantized(model)
+
     if not inplace:
         import copy
         model = copy.deepcopy(model)
 
     for module in model.modules():
-        if isinstance(module, LoRALinear) and module.r > 0 and not module.merged:
+        if is_lora_module(module) and module.r > 0 and not module.merged:
             module.merge()
 
     return model
@@ -36,8 +55,9 @@ def merge_lora_weights(model: nn.Module, inplace: bool = True) -> nn.Module:
 
 def unmerge_lora_weights(model: nn.Module) -> nn.Module:
     """Reverse a merge operation (only possible if LoRA params still exist)."""
+    _reject_quantized(model)
     for module in model.modules():
-        if isinstance(module, LoRALinear) and module.r > 0 and module.merged:
+        if is_lora_module(module) and module.r > 0 and module.merged:
             module.unmerge()
     return model
 
@@ -48,6 +68,9 @@ def merge_and_unload_lora(model: nn.Module, inplace: bool = True) -> nn.Module:
     This is the right path before saving a full transformers model: the returned
     model has ordinary Linear layers and no ``lora_A`` / ``lora_B`` parameters.
 
+    Raises TypeError if the model contains quantized LoRA layers — 4-bit
+    weights cannot be merged in place (use dequantize_and_merge()).
+
     Args:
         model: Model with LoRA layers.
         inplace: If True, modify model in-place. If False, deep-copy first.
@@ -55,12 +78,14 @@ def merge_and_unload_lora(model: nn.Module, inplace: bool = True) -> nn.Module:
     Returns:
         Model with LoRA deltas merged into base weights and adapters unloaded.
     """
+    _reject_quantized(model)
+
     if not inplace:
         model = copy.deepcopy(model)
 
     modules_to_replace: list[tuple[str, LoRALinear]] = []
     for name, module in model.named_modules():
-        if isinstance(module, LoRALinear):
+        if is_lora_module(module):
             modules_to_replace.append((name, module))
 
     for name, lora_module in modules_to_replace:

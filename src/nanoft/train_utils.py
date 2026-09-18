@@ -2,31 +2,44 @@
 
 from __future__ import annotations
 
+from typing import Union
+
 import torch.nn as nn
 
 from .apply import apply_lora
-from .config import LoRAConfig
+from .config import LoRAConfig, QLoRAConfig
+from .quant import quantize_model
 
 
 def prepare_model_for_training(
     model: nn.Module,
-    config: LoRAConfig,
+    config: Union[LoRAConfig, QLoRAConfig],
 ) -> nn.Module:
-    """Prepare a model for LoRA fine-tuning.
+    """Prepare a model for LoRA or QLoRA fine-tuning.
 
     Steps:
-        1. Freeze all existing parameters
-        2. Apply LoRA layers to target modules
-        3. Verify only LoRA params require gradients
-
-    For QLoRA: call quantize_model_to_nf4() before this function.
+        1. QLoRAConfig only: quantize base weights to 4-bit on CUDA
+        2. Freeze all existing parameters
+        3. Apply LoRA layers to target modules (quantized targets are
+           wrapped in-place, LoRA params created in the compute dtype)
+        4. Verify only LoRA params require gradients
     """
+    compute_dtype = None
+    if isinstance(config, QLoRAConfig):
+        from .quant import _DTYPE_MAP
+
+        model = quantize_model(model, config.quantization)
+        compute_dtype = _DTYPE_MAP[config.quantization.compute_dtype]
+        lora_config = config.lora
+    else:
+        lora_config = config
+
     # Freeze all parameters first
     for param in model.parameters():
         param.requires_grad = False
 
     # Apply LoRA adapters (also handles freezing + LoRA grad enable)
-    model = apply_lora(model, config)
+    model = apply_lora(model, lora_config, compute_dtype=compute_dtype)
 
     return model
 
@@ -37,40 +50,3 @@ def print_trainable_parameters(model: nn.Module) -> None:
     total = sum(p.numel() for p in model.parameters())
     pct = 100 * trainable / total if total > 0 else 0
     print(f"Trainable parameters: {trainable:,} / {total:,} ({pct:.2f}%)")
-
-
-def create_training_args(
-    output_dir: str,
-    learning_rate: float = 2e-4,
-    batch_size: int = 8,
-    num_epochs: int = 3,
-    bf16: bool = False,
-    fp16: bool = False,
-    gradient_accumulation_steps: int = 1,
-    max_grad_norm: float = 1.0,
-    warmup_ratio: float = 0.03,
-    logging_steps: int = 10,
-    save_steps: int = 500,
-    save_total_limit: int = 2,
-    **kwargs,
-):
-    """Create HuggingFace TrainingArguments with sensible LoRA defaults."""
-    from transformers import TrainingArguments
-
-    return TrainingArguments(
-        output_dir=output_dir,
-        learning_rate=learning_rate,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        num_train_epochs=num_epochs,
-        bf16=bf16,
-        fp16=fp16,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        max_grad_norm=max_grad_norm,
-        warmup_ratio=warmup_ratio,
-        logging_steps=logging_steps,
-        save_steps=save_steps,
-        save_total_limit=save_total_limit,
-        report_to="none",
-        **kwargs,
-    )
