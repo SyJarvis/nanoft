@@ -50,6 +50,37 @@ python examples/lora_sft_demo.py train --max-steps 512
 如希望训练结束时同时写出完整模型，可添加 `--save-merged`。更推荐先保存
 adapter，评估确认后再独立执行 `merge`。
 
+### BF16 基座与 FP32 adapter 参数
+
+使用 Python API 时，可以先将基座加载为 BF16，再显式指定 dense LoRA 的
+参数精度：
+
+```python
+import torch
+from nanoft import LoRAConfig, prepare_model_for_training
+
+model = prepare_model_for_training(
+    base_model,  # 已加载为 torch.bfloat16
+    LoRAConfig(r=16, lora_alpha=16, target_modules=["q_proj", "v_proj"]),
+    adapter_dtype=torch.float32,
+)
+optimizer = torch.optim.AdamW(
+    (parameter for parameter in model.parameters() if parameter.requires_grad),
+    lr=2e-4,
+)
+```
+
+应先设置 adapter dtype，再构造 optimizer。此设置保留 BF16 基座，使 LoRA
+A/B 参数、梯度以及标准 AdamW 的动量状态为 FP32；外部训练框架的 BF16
+autocast 仍可以在矩阵计算中使用 BF16。参数保存精度与计算精度是独立选择，
+该选项不会关闭 autocast。注入后对整个模型调用 `.to(dtype=...)` 也会转换
+adapter 参数，因此应在注入前设置基座精度。
+
+不传 `adapter_dtype` 时保持原有行为，adapter 跟随基座权重 dtype。
+该参数仅支持 dense LoRA，QLoRA 继续使用其量化配置中的 `compute_dtype`。
+保存 FP32 adapter 后，重新加载也需显式选择 FP32，见
+[Adapter I/O](../api/adapter-io.md#load_adapter)。
+
 ## 使用其他模型或数据
 
 ```bash

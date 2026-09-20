@@ -153,6 +153,18 @@ class TestQuantizeModelGuards:
 
 
 class TestApplyLoraQuantized:
+    def test_adapter_dtype_override_is_rejected_before_injection(self):
+        model = FakeQuantBlock()
+        model.q_proj = nn.Linear(8, 8)
+        original = model.q_proj
+        with pytest.raises(ValueError, match="only supported for dense"):
+            apply_lora(
+                model, LoRAConfig(r=2, target_modules=["q_proj", "v_proj"]),
+                adapter_dtype=torch.float32,
+            )
+        assert model.q_proj is original
+        assert all(param.requires_grad for param in model.parameters())
+
     def test_wraps_quantized_targets(self):
         model, _ = _fake_model_with_lora()
         assert isinstance(model.q_proj, LoRAQuantLinear)
@@ -284,6 +296,12 @@ class TestMergeSemantics:
 
 
 class TestSaveLoad:
+    def test_load_adapter_dtype_override_rejects_quantized_model(self, tmp_path):
+        model, config = _fake_model_with_lora()
+        save_adapter(model, str(tmp_path), config)
+        with pytest.raises(ValueError, match="only supported for dense"):
+            load_adapter(model, str(tmp_path), adapter_dtype=torch.float32)
+
     def _fill_adapter(self, model, value_a, value_b):
         with torch.no_grad():
             model.q_proj.lora_A.fill_(value_a)
@@ -355,6 +373,20 @@ class TestSaveLoad:
 
 
 class TestPrepareModelForTraining:
+    def test_adapter_dtype_override_rejected_before_quantization(self, monkeypatch):
+        from nanoft import prepare_model_for_training, train_utils
+
+        def unexpected_quantize(*args, **kwargs):
+            pytest.fail("quantization must not start for an unsupported override")
+
+        monkeypatch.setattr(train_utils, "quantize_model", unexpected_quantize)
+        model = DenseBlock()
+        with pytest.raises(ValueError, match="only supported for dense"):
+            prepare_model_for_training(
+                model, QLoRAConfig(lora=LoRAConfig()), adapter_dtype=torch.float32
+            )
+        assert all(param.requires_grad for param in model.parameters())
+
     def test_qlora_config_routes_through_quantize(self, monkeypatch):
         from nanoft import prepare_model_for_training
         from nanoft import train_utils

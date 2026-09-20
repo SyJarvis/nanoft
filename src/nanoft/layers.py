@@ -60,6 +60,7 @@ class LoRALinear(nn.Linear, LoRALayer):
         lora_dropout: float = 0.0,
         fan_in_fan_out: bool = False,
         merge_weights: bool = True,
+        adapter_dtype: torch.dtype | None = None,
         **kwargs,
     ):
         nn.Linear.__init__(self, in_features, out_features, **kwargs)
@@ -70,8 +71,12 @@ class LoRALinear(nn.Linear, LoRALayer):
 
         self.fan_in_fan_out = fan_in_fan_out
         if r > 0:
-            self.lora_A = nn.Parameter(self.weight.new_zeros((r, in_features)))
-            self.lora_B = nn.Parameter(self.weight.new_zeros((out_features, r)))
+            self.lora_A = nn.Parameter(
+                self.weight.new_zeros((r, in_features), dtype=adapter_dtype)
+            )
+            self.lora_B = nn.Parameter(
+                self.weight.new_zeros((out_features, r), dtype=adapter_dtype)
+            )
         # Freeze original weight
         self.weight.requires_grad = False
 
@@ -119,12 +124,13 @@ class LoRALinear(nn.Linear, LoRALayer):
         """Forward pass with optional LoRA adapter."""
         result = F.linear(x, self._T(self.weight), bias=self.bias)
         if self.r > 0 and not self.merged:
+            adapter_input = x.to(self.lora_A.dtype)
             lora_out = (
-                self.lora_dropout(x)
+                self.lora_dropout(adapter_input)
                 @ self.lora_A.transpose(0, 1)
                 @ self.lora_B.transpose(0, 1)
             ) * self.scaling
-            result = result + lora_out
+            result = (result + lora_out).to(result.dtype)
         return result
 
     def extra_repr(self) -> str:

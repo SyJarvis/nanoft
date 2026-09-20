@@ -203,12 +203,18 @@ def load_adapter(
     adapter_dir: str,
     device: Optional[str] = None,
     strict: bool = True,
+    adapter_dtype: Optional[torch.dtype] = None,
 ) -> nn.Module:
     """Load LoRA adapter weights into a model.
 
     Supports NanoFT native and PEFT-compatible adapter weights.
     If the model does not already contain LoRA layers, adapters are injected
     from adapter_config.json before loading weights.
+    Set adapter_dtype=torch.float32 to preserve FP32 adapters on a lower-precision
+    dense base, including already-injected models. By default weights are loaded
+    into the model's existing adapter dtype (or the base dtype on injection).
+    This runtime option is not stored in adapter_config.json. Apply it before
+    constructing the optimizer; quantized adapters do not support this override.
     """
     # Load config
     config_path = os.path.join(adapter_dir, "adapter_config.json")
@@ -217,8 +223,13 @@ def load_adapter(
     else:
         raise FileNotFoundError(f"No adapter_config.json in {adapter_dir}")
 
+    if adapter_dtype is not None and any(
+        isinstance(module, LoRAQuantLinear) for module in model.modules()
+    ):
+        raise ValueError("adapter_dtype is only supported for dense LoRA targets")
+
     if not any(is_lora_module(module) for module in model.modules()):
-        model = apply_lora(model, config)
+        model = apply_lora(model, config, adapter_dtype=adapter_dtype)
 
     # Load weights
     safetensors_path = os.path.join(adapter_dir, "adapter_model.safetensors")
@@ -261,6 +272,12 @@ def load_adapter(
             raise RuntimeError("Adapter weights do not match model: " + "; ".join(details))
 
     _validate_adapter_tensors(internal_sd, expected_adapter_sd)
+
+    if adapter_dtype is not None:
+        for module in model.modules():
+            if is_lora_module(module):
+                module.lora_A.data = module.lora_A.data.to(adapter_dtype)
+                module.lora_B.data = module.lora_B.data.to(adapter_dtype)
 
     # Load into model (strict=False to ignore base-model keys absent from adapters).
     result = model.load_state_dict(internal_sd, strict=False)

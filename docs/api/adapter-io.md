@@ -55,6 +55,28 @@ model = load_adapter(
 
 建议保持 `strict=True`。只有明确需要诊断部分 adapter 时才关闭严格模式。
 
+权重文件保留保存时的 tensor dtype。若 adapter 为 FP32、基座为 BF16，
+请在加载时显式指定 dtype，避免将 FP32 权重写入 BF16 adapter 参数：
+
+```python
+import torch
+
+model = load_adapter(
+    base_model,
+    "outputs/adapter_native",
+    adapter_dtype=torch.float32,
+)
+```
+
+同样适用于 PEFT 格式权重及已经注入 dense LoRA 的模型。该选项仅转换
+LoRA A/B，不转换基座或 bias；继续训练时应在加载后构造 optimizer。
+`adapter_dtype` 是运行时选项，不写入 `adapter_config.json`，因此不会向
+PEFT 配置添加专有字段。
+
+默认保持原有行为：新注入的 adapter 跟随基座 dtype，已注入的 adapter
+保留其现有 dtype。`adapter_dtype` 仅支持 dense LoRA，量化 adapter
+传入该选项会被拒绝。
+
 ## 安全检查
 
 NanoFT 会拒绝：

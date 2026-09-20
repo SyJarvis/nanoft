@@ -32,6 +32,7 @@ def apply_lora(
     config: LoRAConfig,
     target_modules: Optional[List[str]] = None,
     compute_dtype: Optional[torch.dtype] = None,
+    adapter_dtype: Optional[torch.dtype] = None,
 ) -> nn.Module:
     """Replace target linear layers with LoRA-wrapped versions.
 
@@ -48,7 +49,10 @@ def apply_lora(
             Defaults to config.get_target_modules().
         compute_dtype: dtype for LoRA parameters on quantized targets
             (QLoRA compute dtype). Ignored for dense targets, whose LoRA
-            parameters follow the base weight dtype.
+            parameters follow the base weight dtype unless adapter_dtype is set.
+        adapter_dtype: Optional dense adapter parameter dtype, for example
+            torch.float32 with a bfloat16 base. Does not change the base weights
+            or autocast policy. Unsupported for quantized targets.
 
     Returns:
         The model with LoRA layers injected (modified in-place).
@@ -77,6 +81,11 @@ def apply_lora(
             "No nn.Linear modules matched target_modules: "
             + ", ".join(patterns)
         )
+
+    if adapter_dtype is not None and any(
+        is_quantized_linear(model.get_submodule(name)) for name in target_names
+    ):
+        raise ValueError("adapter_dtype is only supported for dense LoRA targets")
 
     for name in target_names:
         module = model.get_submodule(name)
@@ -115,12 +124,14 @@ def apply_lora(
             lora_dropout=config.lora_dropout,
             fan_in_fan_out=config.fan_in_fan_out,
             merge_weights=False,
+            adapter_dtype=adapter_dtype,
         )
 
-        # Move to same device and dtype as original module
-        lora_layer = lora_layer.to(
-            device=module.weight.device, dtype=module.weight.dtype
-        )
+        # Move adapters without first rounding them to the base weight dtype.
+        lora_layer = lora_layer.to(device=module.weight.device)
+        lora_layer.weight.data = lora_layer.weight.data.to(module.weight.dtype)
+        if lora_layer.bias is not None:
+            lora_layer.bias.data = lora_layer.bias.data.to(module.weight.dtype)
 
         # Copy original weights
         lora_layer.weight.data.copy_(module.weight.data)
@@ -128,9 +139,10 @@ def apply_lora(
             lora_layer.bias.data.copy_(module.bias.data)
         lora_layer.train(module.training)
 
-        # Sync LoRA parameter dtypes to match base weight
-        lora_layer.lora_A.data = lora_layer.lora_A.data.to(module.weight.dtype)
-        lora_layer.lora_B.data = lora_layer.lora_B.data.to(module.weight.dtype)
+        # By default adapters retain the historical base-weight dtype policy.
+        lora_dtype = adapter_dtype or module.weight.dtype
+        lora_layer.lora_A.data = lora_layer.lora_A.data.to(lora_dtype)
+        lora_layer.lora_B.data = lora_layer.lora_B.data.to(lora_dtype)
 
         # Enable gradient for LoRA parameters
         lora_layer.lora_A.requires_grad = True
