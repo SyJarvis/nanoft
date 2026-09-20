@@ -25,7 +25,7 @@ NanoFT 不负责：
 
 ## 特性
 
-- **LoRA adapter** — 低秩适配器，只训练极少量参数
+- **LoRA adapter** — 低秩适配器，可显式使用 BF16 基座与 FP32 dense adapter 参数
 - **QLoRA 准备能力** — CUDA + bitsandbytes NF4 量化支持（实验性）
 - **多设备支持** — CUDA / MPS / CPU 自动检测
 - **独立 Adapter 格式** — 默认保存 NanoFT 原生 adapter，可显式导出 PEFT 兼容格式
@@ -35,7 +35,7 @@ NanoFT 不负责：
 
 ## 路线图
 
-NanoFT 的总体路线、v0.1 稳定目标和 v0.2 发展重点见
+NanoFT 的当前验证状态、v0.2 收尾、多模态 LoRA（v0.3）及后续 DPO/RL 规划见
 [docs/development/roadmap.md](docs/development/roadmap.md)。完整文档使用
 GitBook 结构组织，入口见 [docs/README.md](docs/README.md)。
 
@@ -94,6 +94,18 @@ Qwen3-0.6B 只是默认演示模型，模型与目标层均可替换。
 
 完整使用说明见
 [docs/guides/lora-sft.md](docs/guides/lora-sft.md)。
+
+新数据可使用预格式化的 `prompt` / `completion` 字符串，先通过
+[`examples/split_sft_data.py`](examples/split_sft_data.py) 按完整 prompt 分组划分，
+再用 `--data-format prompt-completion --completion-only-loss` 训练。
+`--adapter-dtype`、`--amp`、`--full-determinism` 与 `--attn-implementation`
+可在训练、独立评估和合并时显式保持一致；它们分别控制参数精度与执行条件。
+
+203 上已跑通 Gemma 的文本 LoRA 全量训练和 Native/PEFT/merged 产物验证。
+后续受控短训中，同条件 NanoFT/PEFT 权重和生成完全一致，但指令题仍出现
+回归；流程可运行和 loss 下降不等于效果提升。数据划分限制及实际结果见
+[203 实测指南](docs/guides/remote-qwen25-7b-sft.md)。真实 CUDA QLoRA、
+图像和音频微调闭环仍待验证。
 
 ## 配置说明
 

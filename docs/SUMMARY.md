@@ -11,6 +11,7 @@
 ## 使用指南
 
 - [使用 TRL 进行 LoRA SFT](guides/lora-sft.md)
+- [203 Gemma 文本 LoRA 实测与操作](guides/remote-qwen25-7b-sft.md)
 - [适配其他模型](guides/custom-models.md)
 - [加载与评估 Adapter](guides/evaluate-adapters.md)
 
