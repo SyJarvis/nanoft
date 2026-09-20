@@ -1,3 +1,5 @@
+import copy
+
 import torch
 import pytest
 from safetensors.torch import load_file
@@ -57,6 +59,71 @@ def test_nanoft_peft_export_loads_with_peft(tmp_path):
         peft_layer.lora_B["default"].weight,
         nanoft_layer.lora_B,
     )
+
+
+def test_peft_export_targets_only_injected_modules(tmp_path):
+    class VisionProjection(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(16, 16)
+
+        def forward(self, hidden_states):
+            return self.linear(hidden_states)
+
+    base_model = _tiny_llama()
+    base_model.vision = torch.nn.Module()
+    base_model.vision.q_proj = VisionProjection()
+    restored_base = copy.deepcopy(base_model)
+    config = LoRAConfig(r=2, lora_alpha=4, target_modules=["v_proj", "q_proj"])
+    original_config = copy.deepcopy(config)
+
+    with pytest.raises(ValueError, match="is not supported"):
+        peft.get_peft_model(
+            copy.deepcopy(base_model),
+            peft.LoraConfig(r=2, lora_alpha=4, target_modules=config.target_modules),
+        )
+
+    trained = apply_lora(base_model, config)
+    expected_targets = [
+        "model.layers.0.self_attn.q_proj",
+        "model.layers.0.self_attn.v_proj",
+    ]
+    with torch.no_grad():
+        for name in expected_targets:
+            layer = trained.get_submodule(name)
+            layer.lora_A.fill_(0.25)
+            layer.lora_B.fill_(0.5)
+    trained.eval()
+    input_ids = torch.tensor([[1, 2, 3, 4]])
+    with torch.no_grad():
+        expected_logits = trained(input_ids).logits
+
+    save_peft_adapter(trained, str(tmp_path / "peft"), config)
+    save_adapter(trained, str(tmp_path / "native"), config)
+    assert config == original_config
+    peft_config = LoRAConfig.load(tmp_path / "peft" / "adapter_config.json")
+    native_config = LoRAConfig.load(tmp_path / "native" / "adapter_config.json")
+    assert peft_config.target_modules == expected_targets
+    assert native_config.target_modules == original_config.target_modules
+
+    restored = peft.PeftModel.from_pretrained(restored_base, tmp_path / "peft")
+    restored.eval()
+    restored_targets = {
+        name for name, module in restored.base_model.model.named_modules()
+        if hasattr(module, "lora_A")
+    }
+    assert restored_targets == set(expected_targets)
+    for name in expected_targets:
+        actual_layer = restored.base_model.model.get_submodule(name)
+        expected_layer = trained.get_submodule(name)
+        assert torch.equal(
+            actual_layer.lora_A["default"].weight, expected_layer.lora_A
+        )
+        assert torch.equal(
+            actual_layer.lora_B["default"].weight, expected_layer.lora_B
+        )
+    with torch.no_grad():
+        assert torch.allclose(restored(input_ids).logits, expected_logits, atol=1e-6)
 
 
 def test_peft_export_loads_with_nanoft(tmp_path):

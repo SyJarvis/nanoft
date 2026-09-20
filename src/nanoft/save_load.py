@@ -163,20 +163,22 @@ def save_adapter(
     os.makedirs(save_dir, exist_ok=True)
 
     # Save an inference config without mutating the caller's training config.
-    replace(config, inference_mode=True).save(
-        os.path.join(save_dir, "adapter_config.json")
-    )
+    export_config = replace(config, inference_mode=True)
 
     if adapter_format == "peft":
         lora_module_names = {
             name for name, module in model.named_modules()
             if is_lora_module(module)
         }
+        export_config = replace(
+            export_config, target_modules=sorted(lora_module_names)
+        )
         lora_sd = {
             _to_peft_key(key, lora_module_names): value
             for key, value in lora_sd.items()
         }
 
+    export_config.save(os.path.join(save_dir, "adapter_config.json"))
     _save_adapter_state_dict(lora_sd, save_dir, safe_serialization)
 
 
