@@ -32,6 +32,15 @@ class LoRALayer:
         return self.lora_alpha / self.r
 
 
+def is_lora_module(module) -> bool:
+    """Return True for any module carrying NanoFT LoRA state.
+
+    Matches both dense ``LoRALinear`` and the quantized-base wrapper
+    ``LoRAQuantLinear`` (both subclass the ``LoRALayer`` mixin).
+    """
+    return isinstance(module, LoRALayer)
+
+
 class LoRALinear(nn.Linear, LoRALayer):
     """Drop-in replacement for nn.Linear with LoRA adapters.
 
@@ -51,6 +60,7 @@ class LoRALinear(nn.Linear, LoRALayer):
         lora_dropout: float = 0.0,
         fan_in_fan_out: bool = False,
         merge_weights: bool = True,
+        adapter_dtype: torch.dtype | None = None,
         **kwargs,
     ):
         nn.Linear.__init__(self, in_features, out_features, **kwargs)
@@ -61,8 +71,12 @@ class LoRALinear(nn.Linear, LoRALayer):
 
         self.fan_in_fan_out = fan_in_fan_out
         if r > 0:
-            self.lora_A = nn.Parameter(self.weight.new_zeros((r, in_features)))
-            self.lora_B = nn.Parameter(self.weight.new_zeros((out_features, r)))
+            self.lora_A = nn.Parameter(
+                self.weight.new_zeros((r, in_features), dtype=adapter_dtype)
+            )
+            self.lora_B = nn.Parameter(
+                self.weight.new_zeros((out_features, r), dtype=adapter_dtype)
+            )
         # Freeze original weight
         self.weight.requires_grad = False
 
@@ -95,7 +109,7 @@ class LoRALinear(nn.Linear, LoRALayer):
         self.weight.data -= self._T(self.lora_B @ self.lora_A) * self.scaling
         self.merged = False
 
-    def train(self, mode: bool = True):
+    def train(self, mode: bool = True) -> LoRALinear:
         """Switch between train/eval, managing merge state."""
         nn.Linear.train(self, mode)
         if mode:
@@ -104,17 +118,19 @@ class LoRALinear(nn.Linear, LoRALayer):
         else:
             if self.merge_weights and not self.merged:
                 self.merge()
+        return self
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass with optional LoRA adapter."""
         result = F.linear(x, self._T(self.weight), bias=self.bias)
         if self.r > 0 and not self.merged:
+            adapter_input = x.to(self.lora_A.dtype)
             lora_out = (
-                self.lora_dropout(x)
+                self.lora_dropout(adapter_input)
                 @ self.lora_A.transpose(0, 1)
                 @ self.lora_B.transpose(0, 1)
             ) * self.scaling
-            result = result + lora_out
+            result = (result + lora_out).to(result.dtype)
         return result
 
     def extra_repr(self) -> str:

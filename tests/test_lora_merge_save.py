@@ -12,7 +12,7 @@ from nanoft import (
     save_merged_model,
 )
 from nanoft.layers import LoRALinear
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 
 
 class TinyModel(nn.Module):
@@ -89,6 +89,67 @@ def test_save_adapter_defaults_to_native_keys(tmp_path):
     assert not any(key.startswith("base_model.model.") for key in saved)
 
 
+def test_save_adapter_preserves_config_and_round_trips_biases(tmp_path):
+    config = LoRAConfig(
+        r=2,
+        lora_alpha=4,
+        target_modules=["q_proj"],
+        bias="all",
+    )
+    trained = apply_lora(TinyModel(), config)
+    with torch.no_grad():
+        trained.q_proj.bias.fill_(0.25)
+        trained.out.bias.fill_(0.5)
+
+    save_adapter(trained, str(tmp_path), config)
+    loaded = load_adapter(TinyModel(), str(tmp_path))
+
+    assert config.inference_mode is False
+    assert LoRAConfig.load(tmp_path / "adapter_config.json").inference_mode is True
+    assert torch.allclose(loaded.q_proj.bias, trained.q_proj.bias)
+    assert torch.allclose(loaded.out.bias, trained.out.bias)
+
+
+def test_save_adapter_rejects_model_without_lora(tmp_path):
+    with pytest.raises(ValueError, match="does not contain any LoRA"):
+        save_adapter(TinyModel(), str(tmp_path), LoRAConfig(r=2))
+
+    assert not tmp_path.joinpath("adapter_config.json").exists()
+
+
+def test_save_adapter_rejects_non_finite_weights(tmp_path):
+    model = apply_lora(TinyModel(), LoRAConfig(r=2))
+    with torch.no_grad():
+        model.q_proj.lora_A[0, 0] = torch.nan
+
+    with pytest.raises(ValueError, match="non-finite.*q_proj.lora_A"):
+        save_adapter(model, str(tmp_path), LoRAConfig(r=2))
+
+
+def test_load_adapter_rejects_non_finite_weights(tmp_path):
+    config = LoRAConfig(r=2, target_modules=["q_proj"])
+    model = apply_lora(TinyModel(), config)
+    save_adapter(model, str(tmp_path), config)
+    state_dict = load_file(tmp_path / "adapter_model.safetensors")
+    state_dict["q_proj.lora_A"][0, 0] = torch.inf
+    save_file(state_dict, tmp_path / "adapter_model.safetensors")
+
+    with pytest.raises(ValueError, match="non-finite.*q_proj.lora_A"):
+        load_adapter(TinyModel(), str(tmp_path))
+
+
+def test_load_adapter_rejects_shape_mismatch(tmp_path):
+    config = LoRAConfig(r=2, target_modules=["q_proj"])
+    model = apply_lora(TinyModel(), config)
+    save_adapter(model, str(tmp_path), config)
+    state_dict = load_file(tmp_path / "adapter_model.safetensors")
+    state_dict["q_proj.lora_A"] = torch.zeros(3, 4)
+    save_file(state_dict, tmp_path / "adapter_model.safetensors")
+
+    with pytest.raises(RuntimeError, match="shape mismatch.*q_proj.lora_A"):
+        load_adapter(TinyModel(), str(tmp_path))
+
+
 def test_save_peft_adapter_uses_peft_keys_and_loads_back(tmp_path):
     config = LoRAConfig(r=2, lora_alpha=4, target_modules=["q_proj"])
     trained = apply_lora(TinyModel(), config)
@@ -98,8 +159,31 @@ def test_save_peft_adapter_uses_peft_keys_and_loads_back(tmp_path):
     saved = load_file(tmp_path / "adapter_model.safetensors")
     loaded = load_adapter(TinyModel(), str(tmp_path))
 
-    assert "base_model.model.q_proj.lora_A.default.weight" in saved
+    assert "base_model.model.q_proj.lora_A.weight" in saved
+    assert not any(".default.weight" in key for key in saved)
     assert isinstance(loaded.q_proj, LoRALinear)
+    assert torch.allclose(loaded.q_proj.lora_A, trained.q_proj.lora_A)
+    assert torch.allclose(loaded.q_proj.lora_B, trained.q_proj.lora_B)
+
+
+def test_load_adapter_accepts_legacy_peft_default_adapter_keys(tmp_path):
+    config = LoRAConfig(r=2, lora_alpha=4, target_modules=["q_proj"])
+    trained = apply_lora(TinyModel(), config)
+    _fill_lora(trained)
+
+    config.save(tmp_path / "adapter_config.json")
+    save_file(
+        {
+            "base_model.model.q_proj.lora_A.default.weight":
+                trained.q_proj.lora_A.detach(),
+            "base_model.model.q_proj.lora_B.default.weight":
+                trained.q_proj.lora_B.detach(),
+        },
+        tmp_path / "adapter_model.safetensors",
+    )
+
+    loaded = load_adapter(TinyModel(), str(tmp_path))
+
     assert torch.allclose(loaded.q_proj.lora_A, trained.q_proj.lora_A)
     assert torch.allclose(loaded.q_proj.lora_B, trained.q_proj.lora_B)
 

@@ -1,10 +1,65 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-.claude
-.cursor
-.sisyphus/
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建输出
+build/
+dist/
+*.tsbuildinfo
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
 .DS_Store
-.cache/
+
+# 日志
+*.log
+logs/
+
+# 开发计划
+plan/
+
+# 测试覆盖率
+coverage/
+.pytest_cache/
+
+# 本地数据与输出
 data/
 output/
+
+# AI 助手配置
+/.agent
+/.claude
+/.cursor
+/.gemini
+/.trae
+/.iflow
+/.specify
+/specs
+
+IFLOW.md

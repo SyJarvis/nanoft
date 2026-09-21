@@ -1,0 +1,12 @@
+root: ./docs/
+
+structure:
+  readme: README.md
+  summary: SUMMARY.md
+
+redirects:
+  usage/lora_sft_demo.md: guides/lora-sft.md
+  bug/MERGE_VERIFY_ISSUE.md: troubleshooting/merge-verification.md
+  training_framework_adapters.md: development/integration-design.md
+  roadmap.md: development/roadmap.md
+  unsloth_vs_nanoft.md: benchmarks/unsloth-comparison.md
